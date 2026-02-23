@@ -1,0 +1,14 @@
+.vs/
+.idea/
+.vscode/
+
+Config/
+Content/
+Source/
+Binaries/
+Intermediate/
+Saved/
+
+*.vsconfig
+*.uproject
+*.sln
