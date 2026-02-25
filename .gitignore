@@ -4,12 +4,19 @@
 
 Config/
 Content/
-Source/
+
 Binaries/
 Intermediate/
 DerivedDataCache/
 Saved/
 
+Plugins/*/Binaries/
+Plugins/*/Intermediate/
+
 *.vsconfig
 *.uproject
 *.sln
+
+!Plugins/*/Source/**
+!Plugins/*/Resources/**
+!Plugins/*/*.uplugin
