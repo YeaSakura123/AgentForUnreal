@@ -35,7 +35,10 @@ public class AstroBot : ModuleRules
 		PrivateDependencyModuleNames.AddRange(
 			new string[]
 			{
-				// ... add private dependencies that you statically link with here ...
+				// 为真实大模型请求提供 HTTP 与 JSON 支持。
+				"HTTP",
+				"Json",
+				"JsonUtilities",
 			}
 			);
 		
