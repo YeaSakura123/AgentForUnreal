@@ -13,6 +13,7 @@ class UWorldBookAsset;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FAstroPromptBuiltSignature, const FString&, PromptText);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FAstroNPCReplySignature, const FString&, ReplyText);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FAstroToolExecutedSignature, const FAstroToolCall&, ToolCall, const FAstroToolExecutionResult&, Result);
 
 // NPC 对话 Runtime 协调组件。
 // 流程：收集上下文 -> 构建 Prompt -> 发请求 -> 收回复。
@@ -32,6 +33,10 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "AstroBot|Interaction")
 	void StopInteract();
+
+	// 项目侧可用来播放 NPC 动作动画的默认工具实现。
+	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "AstroBot|Tools")
+	FAstroToolExecutionResult HandleAstroToolCall(const FAstroToolCall& ToolCall);
 	
 	
 	UPROPERTY(BlueprintAssignable, Category = "AstroBot|Interaction")
@@ -77,6 +82,18 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "AstroBot|LLM", meta = (EditCondition = "RequestMode == EAstroModelRequestMode::RealAPI"))
 	FString ApiKey;
 
+	// 是否向真实模型声明并执行工具调用。
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "AstroBot|Tools", meta = (EditCondition = "RequestMode == EAstroModelRequestMode::RealAPI"))
+	bool bEnableToolCalling = true;
+
+	// 每次玩家输入允许的最大工具调用轮数，避免模型陷入无限调用。
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "AstroBot|Tools", meta = (ClampMin = "0", ClampMax = "8", EditCondition = "RequestMode == EAstroModelRequestMode::RealAPI && bEnableToolCalling"))
+	int32 MaxToolCallsPerMessage = 2;
+
+	// 当前组件对模型声明的可用工具列表。默认会注册 PlayNPCAnimation。
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "AstroBot|Tools", meta = (EditCondition = "RequestMode == EAstroModelRequestMode::RealAPI && bEnableToolCalling"))
+	TArray<FAstroToolDefinition> AvailableTools;
+
 	UPROPERTY(BlueprintReadOnly, Category = "AstroBot|State")
 	bool bIsInteracting = false;
 
@@ -89,6 +106,18 @@ public:
 	// 保存最近一次发送给请求层的用户文本，便于 Mock 模式做稳定分支判断。
 	UPROPERTY(BlueprintReadOnly, Category = "AstroBot|State")
 	FString LastUserMessage;
+
+	// 最近一次被模型触发的工具调用。
+	UPROPERTY(BlueprintReadOnly, Category = "AstroBot|State")
+	FAstroToolCall LastToolCall;
+
+	// 最近一次工具执行结果。
+	UPROPERTY(BlueprintReadOnly, Category = "AstroBot|State")
+	FAstroToolExecutionResult LastToolExecutionResult;
+
+	// 工具执行完成时触发，便于蓝图调试工具链路。
+	UPROPERTY(BlueprintAssignable, Category = "AstroBot|Tools")
+	FAstroToolExecutedSignature OnToolExecuted;
 
 protected:
 	UPROPERTY(Transient)
@@ -105,8 +134,13 @@ protected:
 	FString BuildMockReply(const FString& PromptText) const;
 	// 发起 OpenAI 兼容 HTTP 请求。
 	void SendHttpRequestToModel(const FString& PromptText);
+	void SendHttpRequestToModelWithMessages(const TArray<struct FAstroOpenAIChatMessage>& Messages, bool bIncludeTools, int32 ToolCallDepth);
 	// 解析 HTTP 结果并统一转交回复入口。
 	void OnModelHttpResponseReceived(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
+	void OnToolFollowUpHttpResponseReceived(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
 	// 统一回复入口：更新状态并广播事件。
 	void HandleModelReply(const FString& ReplyText);
+	void RegisterDefaultTools();
+	FAstroToolExecutionResult ExecuteToolCall(const FAstroToolCall& ToolCall);
+	virtual FAstroToolExecutionResult HandleAstroToolCall_Implementation(const FAstroToolCall& ToolCall);
 };

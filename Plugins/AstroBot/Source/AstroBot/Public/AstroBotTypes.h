@@ -82,3 +82,92 @@ struct ASTROBOT_API FAstroPlayerSnapshot
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AstroBot|Player")
 	FString CurrentQuest;
 };
+
+// 工具参数描述，用于向模型声明可调用能力。
+USTRUCT(BlueprintType)
+struct ASTROBOT_API FAstroToolParameter
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AstroBot|Tools")
+	FString Name;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AstroBot|Tools")
+	FString Type = TEXT("string");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AstroBot|Tools")
+	FString Description;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AstroBot|Tools")
+	bool bRequired = true;
+};
+
+// 单个工具声明。
+USTRUCT(BlueprintType)
+struct ASTROBOT_API FAstroToolDefinition
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AstroBot|Tools")
+	FString ToolName;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AstroBot|Tools")
+	FString Description;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AstroBot|Tools")
+	TArray<FAstroToolParameter> Parameters;
+};
+
+// 模型发起的单次工具调用。
+USTRUCT(BlueprintType)
+struct ASTROBOT_API FAstroToolCall
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AstroBot|Tools")
+	FString ToolCallId;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AstroBot|Tools")
+	FString ToolName;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AstroBot|Tools")
+	FString ArgumentsJson;
+};
+
+// UE 侧执行工具后的统一结果。
+USTRUCT(BlueprintType)
+struct ASTROBOT_API FAstroToolExecutionResult
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AstroBot|Tools")
+	bool bSuccess = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AstroBot|Tools")
+	FString ResultJson;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AstroBot|Tools")
+	FString ResultMessage;
+};
+
+// 发送给 OpenAI 兼容聊天接口的消息结构。
+USTRUCT(BlueprintType)
+struct ASTROBOT_API FAstroOpenAIChatMessage
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AstroBot|LLM")
+	FString Role;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AstroBot|LLM")
+	FString Content;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AstroBot|LLM")
+	FString Name;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AstroBot|LLM")
+	FString ToolCallId;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AstroBot|LLM")
+	TArray<FAstroToolCall> ToolCalls;
+};

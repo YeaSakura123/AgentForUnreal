@@ -16,6 +16,162 @@
 
 namespace AstroNPCComponentInternal
 {
+	static const FString PlayNPCAnimationToolName = TEXT("PlayNPCAnimation");
+
+	static void AddChatMessageJson(TArray<TSharedPtr<FJsonValue>>& MessageValues, const FAstroOpenAIChatMessage& Message)
+	{
+		TSharedRef<FJsonObject> MessageObject = MakeShared<FJsonObject>();
+		MessageObject->SetStringField(TEXT("role"), Message.Role);
+
+		if (!Message.Content.IsEmpty())
+		{
+			MessageObject->SetStringField(TEXT("content"), Message.Content);
+		}
+		else
+		{
+			MessageObject->SetStringField(TEXT("content"), TEXT(""));
+		}
+
+		if (!Message.Name.IsEmpty())
+		{
+			MessageObject->SetStringField(TEXT("name"), Message.Name);
+		}
+
+		if (!Message.ToolCallId.IsEmpty())
+		{
+			MessageObject->SetStringField(TEXT("tool_call_id"), Message.ToolCallId);
+		}
+
+		if (!Message.ToolCalls.IsEmpty())
+		{
+			TArray<TSharedPtr<FJsonValue>> ToolCallValues;
+			for (const FAstroToolCall& ToolCall : Message.ToolCalls)
+			{
+				TSharedRef<FJsonObject> ToolCallObject = MakeShared<FJsonObject>();
+				ToolCallObject->SetStringField(TEXT("id"), ToolCall.ToolCallId);
+				ToolCallObject->SetStringField(TEXT("type"), TEXT("function"));
+
+				TSharedRef<FJsonObject> FunctionObject = MakeShared<FJsonObject>();
+				FunctionObject->SetStringField(TEXT("name"), ToolCall.ToolName);
+				FunctionObject->SetStringField(TEXT("arguments"), ToolCall.ArgumentsJson);
+				ToolCallObject->SetObjectField(TEXT("function"), FunctionObject);
+
+				ToolCallValues.Add(MakeShared<FJsonValueObject>(ToolCallObject));
+			}
+
+			MessageObject->SetArrayField(TEXT("tool_calls"), ToolCallValues);
+		}
+
+		MessageValues.Add(MakeShared<FJsonValueObject>(MessageObject));
+	}
+
+	static void AddToolDefinitionsJson(TSharedRef<FJsonObject> RootObject, const TArray<FAstroToolDefinition>& ToolDefinitions)
+	{
+		TArray<TSharedPtr<FJsonValue>> ToolValues;
+		for (const FAstroToolDefinition& ToolDefinition : ToolDefinitions)
+		{
+			TSharedRef<FJsonObject> ToolObject = MakeShared<FJsonObject>();
+			ToolObject->SetStringField(TEXT("type"), TEXT("function"));
+
+			TSharedRef<FJsonObject> FunctionObject = MakeShared<FJsonObject>();
+			FunctionObject->SetStringField(TEXT("name"), ToolDefinition.ToolName);
+			FunctionObject->SetStringField(TEXT("description"), ToolDefinition.Description);
+
+			TSharedRef<FJsonObject> ParametersObject = MakeShared<FJsonObject>();
+			ParametersObject->SetStringField(TEXT("type"), TEXT("object"));
+
+			TSharedRef<FJsonObject> PropertiesObject = MakeShared<FJsonObject>();
+			TArray<TSharedPtr<FJsonValue>> RequiredValues;
+
+			for (const FAstroToolParameter& Parameter : ToolDefinition.Parameters)
+			{
+				TSharedRef<FJsonObject> PropertyObject = MakeShared<FJsonObject>();
+				PropertyObject->SetStringField(TEXT("type"), Parameter.Type.IsEmpty() ? TEXT("string") : Parameter.Type);
+				PropertyObject->SetStringField(TEXT("description"), Parameter.Description);
+				PropertiesObject->SetObjectField(Parameter.Name, PropertyObject);
+
+				if (Parameter.bRequired)
+				{
+					RequiredValues.Add(MakeShared<FJsonValueString>(Parameter.Name));
+				}
+			}
+
+			ParametersObject->SetObjectField(TEXT("properties"), PropertiesObject);
+			ParametersObject->SetArrayField(TEXT("required"), RequiredValues);
+			FunctionObject->SetObjectField(TEXT("parameters"), ParametersObject);
+			ToolObject->SetObjectField(TEXT("function"), FunctionObject);
+
+			ToolValues.Add(MakeShared<FJsonValueObject>(ToolObject));
+		}
+
+		if (!ToolValues.IsEmpty())
+		{
+			RootObject->SetArrayField(TEXT("tools"), ToolValues);
+		}
+	}
+
+	static bool ParseToolCallFromResponse(const FString& ResponseText, FAstroToolCall& OutToolCall, FString& OutAssistantContent)
+	{
+		OutToolCall = FAstroToolCall();
+		OutAssistantContent.Reset();
+
+		TSharedPtr<FJsonObject> RootObject;
+		TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ResponseText);
+		if (!FJsonSerializer::Deserialize(Reader, RootObject) || !RootObject.IsValid())
+		{
+			return false;
+		}
+
+		const TArray<TSharedPtr<FJsonValue>>* Choices = nullptr;
+		if (!RootObject->TryGetArrayField(TEXT("choices"), Choices) || Choices == nullptr || Choices->IsEmpty())
+		{
+			return false;
+		}
+
+		const TSharedPtr<FJsonObject>* FirstChoiceObject = nullptr;
+		if (!(*Choices)[0].IsValid() || !(*Choices)[0]->TryGetObject(FirstChoiceObject) || FirstChoiceObject == nullptr)
+		{
+			return false;
+		}
+
+		const TSharedPtr<FJsonObject>* MessageObject = nullptr;
+		if (!(*FirstChoiceObject)->TryGetObjectField(TEXT("message"), MessageObject) || MessageObject == nullptr)
+		{
+			return false;
+		}
+
+		(*MessageObject)->TryGetStringField(TEXT("content"), OutAssistantContent);
+		OutAssistantContent = OutAssistantContent.TrimStartAndEnd();
+
+		const TArray<TSharedPtr<FJsonValue>>* ToolCalls = nullptr;
+		if (!(*MessageObject)->TryGetArrayField(TEXT("tool_calls"), ToolCalls) || ToolCalls == nullptr || ToolCalls->IsEmpty())
+		{
+			return false;
+		}
+
+		const TSharedPtr<FJsonObject>* FirstToolCallObject = nullptr;
+		if (!(*ToolCalls)[0].IsValid() || !(*ToolCalls)[0]->TryGetObject(FirstToolCallObject) || FirstToolCallObject == nullptr)
+		{
+			return false;
+		}
+
+		(*FirstToolCallObject)->TryGetStringField(TEXT("id"), OutToolCall.ToolCallId);
+
+		const TSharedPtr<FJsonObject>* FunctionObject = nullptr;
+		if (!(*FirstToolCallObject)->TryGetObjectField(TEXT("function"), FunctionObject) || FunctionObject == nullptr)
+		{
+			return false;
+		}
+
+		if (!(*FunctionObject)->TryGetStringField(TEXT("name"), OutToolCall.ToolName))
+		{
+			return false;
+		}
+
+		(*FunctionObject)->TryGetStringField(TEXT("arguments"), OutToolCall.ArgumentsJson);
+		return true;
+	}
+
 	static FString ExtractAssistantReplyFromOpenAIResponse(const FString& ResponseText)
 	{
 		TSharedPtr<FJsonObject> RootObject;
@@ -57,6 +213,7 @@ namespace AstroNPCComponentInternal
 UAstroNPCComponent::UAstroNPCComponent()
 {
 	PrimaryComponentTick.bCanEverTick = false;
+	RegisterDefaultTools();
 }
 
 void UAstroNPCComponent::StartInteract(APlayerController* PlayerController)
@@ -208,6 +365,17 @@ FString UAstroNPCComponent::BuildMockReply(const FString& PromptText) const
 
 void UAstroNPCComponent::SendHttpRequestToModel(const FString& PromptText)
 {
+	TArray<FAstroOpenAIChatMessage> Messages;
+	FAstroOpenAIChatMessage UserMessage;
+	UserMessage.Role = TEXT("user");
+	UserMessage.Content = PromptText;
+	Messages.Add(UserMessage);
+
+	SendHttpRequestToModelWithMessages(Messages, bEnableToolCalling, 0);
+}
+
+void UAstroNPCComponent::SendHttpRequestToModelWithMessages(const TArray<FAstroOpenAIChatMessage>& Messages, const bool bIncludeTools, const int32 ToolCallDepth)
+{
 	// 真实接口只在必要配置齐全时发送，避免测试阶段误打外部接口。
 	if (ApiBaseUrl.IsEmpty())
 	{
@@ -230,15 +398,19 @@ void UAstroNPCComponent::SendHttpRequestToModel(const FString& PromptText)
 	TSharedRef<FJsonObject> RootObject = MakeShared<FJsonObject>();
 	RootObject->SetStringField(TEXT("model"), ModelName);
 
-	TArray<TSharedPtr<FJsonValue>> Messages;
+	TArray<TSharedPtr<FJsonValue>> MessageValues;
+	for (const FAstroOpenAIChatMessage& Message : Messages)
 	{
-		TSharedRef<FJsonObject> UserMessageObject = MakeShared<FJsonObject>();
-		// 这里直接发送已经构建好的 Prompt，保持与当前插件 Prompt 架构一致。
-		UserMessageObject->SetStringField(TEXT("role"), TEXT("user"));
-		UserMessageObject->SetStringField(TEXT("content"), PromptText);
-		Messages.Add(MakeShared<FJsonValueObject>(UserMessageObject));
+		AstroNPCComponentInternal::AddChatMessageJson(MessageValues, Message);
 	}
-	RootObject->SetArrayField(TEXT("messages"), Messages);
+	RootObject->SetArrayField(TEXT("messages"), MessageValues);
+
+	if (bIncludeTools && !AvailableTools.IsEmpty())
+	{
+		AstroNPCComponentInternal::AddToolDefinitionsJson(RootObject, AvailableTools);
+	}
+
+	RootObject->SetNumberField(TEXT("temperature"), 0.7);
 
 	FString RequestBody;
 	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&RequestBody);
@@ -253,8 +425,17 @@ void UAstroNPCComponent::SendHttpRequestToModel(const FString& PromptText)
 	Request->SetVerb(TEXT("POST"));
 	Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
 	Request->SetHeader(TEXT("Authorization"), FString::Printf(TEXT("Bearer %s"), *ApiKey));
+	Request->SetHeader(TEXT("X-AstroBot-ToolDepth"), LexToString(ToolCallDepth));
 	Request->SetContentAsString(RequestBody);
-	Request->OnProcessRequestComplete().BindUObject(this, &UAstroNPCComponent::OnModelHttpResponseReceived);
+
+	if (ToolCallDepth <= 0)
+	{
+		Request->OnProcessRequestComplete().BindUObject(this, &UAstroNPCComponent::OnModelHttpResponseReceived);
+	}
+	else
+	{
+		Request->OnProcessRequestComplete().BindUObject(this, &UAstroNPCComponent::OnToolFollowUpHttpResponseReceived);
+	}
 
 	if (!Request->ProcessRequest())
 	{
@@ -264,9 +445,6 @@ void UAstroNPCComponent::SendHttpRequestToModel(const FString& PromptText)
 
 void UAstroNPCComponent::OnModelHttpResponseReceived(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful)
 {
-	// 当前回调不需要直接读取 Request，但保留参数以兼容 UE HTTP 回调签名。
-	(void)Request;
-
 	// 统一在回调里做错误折叠，避免把失败状态散落到多个分支里。
 	if (!bWasSuccessful || !Response.IsValid())
 	{
@@ -283,6 +461,54 @@ void UAstroNPCComponent::OnModelHttpResponseReceived(FHttpRequestPtr Request, FH
 		return;
 	}
 
+	const int32 ToolCallDepth = Request.IsValid()
+		? FCString::Atoi(*Request->GetHeader(TEXT("X-AstroBot-ToolDepth")))
+		: 0;
+
+	if (bEnableToolCalling && ToolCallDepth < MaxToolCallsPerMessage)
+	{
+		FAstroToolCall ToolCall;
+		FString AssistantContent;
+		if (AstroNPCComponentInternal::ParseToolCallFromResponse(Response->GetContentAsString(), ToolCall, AssistantContent))
+		{
+			LastToolCall = ToolCall;
+			LastToolExecutionResult = ExecuteToolCall(ToolCall);
+			OnToolExecuted.Broadcast(LastToolCall, LastToolExecutionResult);
+
+			if (!LastToolExecutionResult.bSuccess)
+			{
+				HandleModelReply(LastToolExecutionResult.ResultMessage.IsEmpty()
+					? TEXT("[AstroBot Tool Error] Tool execution failed.")
+					: LastToolExecutionResult.ResultMessage);
+				return;
+			}
+
+			TArray<FAstroOpenAIChatMessage> FollowUpMessages;
+			FAstroOpenAIChatMessage UserMessage;
+			UserMessage.Role = TEXT("user");
+			UserMessage.Content = LastBuiltPrompt;
+			FollowUpMessages.Add(UserMessage);
+
+			FAstroOpenAIChatMessage AssistantMessage;
+			AssistantMessage.Role = TEXT("assistant");
+			AssistantMessage.Content = AssistantContent;
+			AssistantMessage.ToolCalls.Add(ToolCall);
+			FollowUpMessages.Add(AssistantMessage);
+
+			FAstroOpenAIChatMessage ToolMessage;
+			ToolMessage.Role = TEXT("tool");
+			ToolMessage.Name = ToolCall.ToolName;
+			ToolMessage.ToolCallId = ToolCall.ToolCallId;
+			ToolMessage.Content = LastToolExecutionResult.ResultJson.IsEmpty()
+				? LastToolExecutionResult.ResultMessage
+				: LastToolExecutionResult.ResultJson;
+			FollowUpMessages.Add(ToolMessage);
+
+			SendHttpRequestToModelWithMessages(FollowUpMessages, false, ToolCallDepth + 1);
+			return;
+		}
+	}
+
 	const FString ReplyText = AstroNPCComponentInternal::ExtractAssistantReplyFromOpenAIResponse(Response->GetContentAsString());
 	if (ReplyText.IsEmpty())
 	{
@@ -291,6 +517,11 @@ void UAstroNPCComponent::OnModelHttpResponseReceived(FHttpRequestPtr Request, FH
 	}
 
 	HandleModelReply(ReplyText);
+}
+
+void UAstroNPCComponent::OnToolFollowUpHttpResponseReceived(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful)
+{
+	OnModelHttpResponseReceived(Request, Response, bWasSuccessful);
 }
 
 void UAstroNPCComponent::HandleModelReply(const FString& ReplyText)
@@ -310,4 +541,53 @@ void UAstroNPCComponent::HandleModelReply(const FString& ReplyText)
 	}
 
 	OnReplyReceived.Broadcast(ReplyText);
+}
+
+void UAstroNPCComponent::RegisterDefaultTools()
+{
+	if (!AvailableTools.IsEmpty())
+	{
+		return;
+	}
+
+	FAstroToolDefinition PlayAnimationTool;
+	PlayAnimationTool.ToolName = AstroNPCComponentInternal::PlayNPCAnimationToolName;
+	PlayAnimationTool.Description = TEXT("Play a semantic animation on the current NPC. Use short animation tags such as Greet, Nod, Wave, Point, Laugh, or IdleTalk.");
+
+	FAstroToolParameter AnimationTagParameter;
+	AnimationTagParameter.Name = TEXT("animation_tag");
+	AnimationTagParameter.Type = TEXT("string");
+	AnimationTagParameter.Description = TEXT("Semantic animation tag to play on the NPC, for example Greet or Nod.");
+	AnimationTagParameter.bRequired = true;
+	PlayAnimationTool.Parameters.Add(AnimationTagParameter);
+
+	AvailableTools.Add(PlayAnimationTool);
+}
+
+FAstroToolExecutionResult UAstroNPCComponent::ExecuteToolCall(const FAstroToolCall& ToolCall)
+{
+	FAstroToolExecutionResult Result;
+
+	if (!IsValid(this))
+	{
+		Result.ResultMessage = TEXT("[AstroBot Tool Error] Component is invalid.");
+		return Result;
+	}
+
+	Result = HandleAstroToolCall(ToolCall);
+	if (Result.ResultJson.IsEmpty())
+	{
+		Result.ResultJson = FString::Printf(TEXT("{\"success\":%s,\"message\":\"%s\"}"), Result.bSuccess ? TEXT("true") : TEXT("false"), *Result.ResultMessage.ReplaceCharWithEscapedChar());
+	}
+
+	return Result;
+}
+
+FAstroToolExecutionResult UAstroNPCComponent::HandleAstroToolCall_Implementation(const FAstroToolCall& ToolCall)
+{
+	FAstroToolExecutionResult Result;
+	Result.bSuccess = false;
+	Result.ResultMessage = FString::Printf(TEXT("[AstroBot Tool Error] Tool '%s' is not implemented on this component. Override HandleAstroToolCall in Blueprint or C++."), *ToolCall.ToolName);
+	Result.ResultJson = FString::Printf(TEXT("{\"success\":false,\"tool_name\":\"%s\",\"message\":\"%s\"}"), *ToolCall.ToolName.ReplaceCharWithEscapedChar(), *Result.ResultMessage.ReplaceCharWithEscapedChar());
+	return Result;
 }
