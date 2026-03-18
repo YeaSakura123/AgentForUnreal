@@ -18,6 +18,9 @@ Plugins/*/Intermediate/
 *.uproject
 *.sln
 
+!Plugins/
+!Plugins/*/
+!Plugins/*/Source/
 !Plugins/*/Source/**
 !Plugins/*/Resources/**
 !Plugins/*/*.uplugin
