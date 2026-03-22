@@ -16,14 +16,16 @@ public class AstroBotEditor : ModuleRules
 
         PrivateDependencyModuleNames.AddRange(
             new string[]
-            {
-                "CoreUObject",
-                "Engine",
-                "Kismet",
-                "UnrealEd",
-                "Json",
-                "JsonUtilities"
-            }
+			{
+				"CoreUObject",
+				"Engine",
+				"Kismet",
+				"AssetRegistry",
+				"AssetTools",
+				"UnrealEd",
+				"Json",
+				"JsonUtilities"
+			}
         );
     }
 }
