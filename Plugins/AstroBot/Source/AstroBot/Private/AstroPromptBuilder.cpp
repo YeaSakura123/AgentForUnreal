@@ -22,6 +22,7 @@ namespace AstroPromptBuilderInternal
 FString UAstroPromptBuilder::BuildPrompt(
 	const UCharacterCardAsset* CharacterCard,
 	const TArray<FWorldBookEntry>& RecalledWorldBookEntries,
+	const FAstroRuntimeCharacterOverlay& RuntimeOverlay,
 	const FAstroPlayerSnapshot& PlayerSnapshot,
 	const TArray<FAstroDialogueTurn>& ConversationHistory)
 {
@@ -39,6 +40,25 @@ FString UAstroPromptBuilder::BuildPrompt(
 	else
 	{
 		Prompt += TEXT("CharacterCard is empty. Keep a neutral assistant behavior.\n\n");
+	}
+
+	Prompt += TEXT("# Runtime Character Overlay\n");
+	if (RuntimeOverlay.RelationshipSummary.IsEmpty()
+		&& RuntimeOverlay.AdditionalPersonaText.IsEmpty()
+		&& RuntimeOverlay.AdditionalStyleText.IsEmpty()
+		&& RuntimeOverlay.AdditionalForbiddenText.IsEmpty()
+		&& RuntimeOverlay.RecentMemorySummary.IsEmpty())
+	{
+		Prompt += TEXT("No runtime overlay. Use the base character card only.\n\n");
+	}
+	else
+	{
+		Prompt += FString::Printf(TEXT("AffinityScore: %d\n"), RuntimeOverlay.AffinityScore);
+		Prompt += FString::Printf(TEXT("RelationshipSummary: %s\n"), *RuntimeOverlay.RelationshipSummary);
+		Prompt += FString::Printf(TEXT("AdditionalPersonaText: %s\n"), *RuntimeOverlay.AdditionalPersonaText);
+		Prompt += FString::Printf(TEXT("AdditionalStyleText: %s\n"), *RuntimeOverlay.AdditionalStyleText);
+		Prompt += FString::Printf(TEXT("AdditionalForbiddenText: %s\n"), *RuntimeOverlay.AdditionalForbiddenText);
+		Prompt += FString::Printf(TEXT("RecentMemorySummary: %s\n\n"), *RuntimeOverlay.RecentMemorySummary);
 	}
 
 	Prompt += TEXT("# World Context\n");
@@ -80,4 +100,14 @@ FString UAstroPromptBuilder::BuildPrompt(
 	}
 
 	return Prompt;
+}
+
+FString UAstroPromptBuilder::BuildPromptWithoutOverlay(
+	const UCharacterCardAsset* CharacterCard,
+	const TArray<FWorldBookEntry>& RecalledWorldBookEntries,
+	const FAstroPlayerSnapshot& PlayerSnapshot,
+	const TArray<FAstroDialogueTurn>& ConversationHistory)
+{
+	// 兼容旧接口时自动传入空 Overlay，避免旧逻辑调用点立即全部重写。
+	return BuildPrompt(CharacterCard, RecalledWorldBookEntries, FAstroRuntimeCharacterOverlay(), PlayerSnapshot, ConversationHistory);
 }

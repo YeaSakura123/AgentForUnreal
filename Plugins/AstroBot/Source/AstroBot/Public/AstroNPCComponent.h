@@ -5,6 +5,7 @@
 #include "Interfaces/IHttpRequest.h"
 #include "Interfaces/IHttpResponse.h"
 #include "AstroBotTypes.h"
+#include "AstroDirectorTypes.h"
 #include "AstroNPCComponent.generated.h"
 
 class APlayerController;
@@ -94,6 +95,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "AstroBot|Tools", meta = (EditCondition = "RequestMode == EAstroModelRequestMode::RealAPI && bEnableToolCalling"))
 	TArray<FAstroToolDefinition> AvailableTools;
 
+	// 是否在交互结束时向导演系统上报会话摘要。
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "AstroBot|Director")
+	bool bReportConversationToDirector = true;
+
 	UPROPERTY(BlueprintReadOnly, Category = "AstroBot|State")
 	bool bIsInteracting = false;
 
@@ -119,6 +124,10 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "AstroBot|Tools")
 	FAstroToolExecutedSignature OnToolExecuted;
 
+	// 当前 NPC 从导演系统拿到的运行时补丁，仅在本次运行期间生效。
+	UPROPERTY(BlueprintReadOnly, Category = "AstroBot|Director")
+	FAstroRuntimeCharacterOverlay RuntimeCharacterOverlay;
+
 protected:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<APlayerController> CurrentPlayerController;
@@ -128,6 +137,8 @@ protected:
 
 	// 采集当前可用的玩家字段，作为 Prompt 上下文。
 	FAstroPlayerSnapshot CollectPlayerSnapshot() const;
+	FAstroNPCConversationSummary BuildConversationSummaryForDirector() const;
+	void SubmitConversationSummaryToDirector();
 	// 请求发送入口；内部根据模式切换到 Stub / Mock / RealAPI，避免破坏现有上游流程。
 	void SendRequestToModel(const FString& PromptText);
 	// 为 Mock 模式生成可预测回复，保证测试时不依赖网络与计费接口。

@@ -6,10 +6,12 @@
 #include "Interfaces/IHttpResponse.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
+#include "Engine/GameInstance.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerState.h"
+#include "AstroDirectorSubsystem.h"
 #include "AstroPromptBuilder.h"
 #include "CharacterCardAsset.h"
 #include "WorldBookAsset.h"
@@ -251,7 +253,9 @@ void UAstroNPCComponent::SendMessage(const FString& Text)
 	}
 
 	const FAstroPlayerSnapshot Snapshot = CollectPlayerSnapshot();
-	LastBuiltPrompt = UAstroPromptBuilder::BuildPrompt(CharacterCard, RecalledEntries, Snapshot, ConversationHistory);
+	// 旧版本 Prompt 构建只传 CharacterCard / WorldBook / Snapshot / History，保留如下：
+	// LastBuiltPrompt = UAstroPromptBuilder::BuildPrompt(CharacterCard, RecalledEntries, Snapshot, ConversationHistory);
+	LastBuiltPrompt = UAstroPromptBuilder::BuildPrompt(CharacterCard, RecalledEntries, RuntimeCharacterOverlay, Snapshot, ConversationHistory);
 	OnPromptBuilt.Broadcast(LastBuiltPrompt);
 
 	SendRequestToModel(LastBuiltPrompt);
@@ -259,6 +263,14 @@ void UAstroNPCComponent::SendMessage(const FString& Text)
 
 void UAstroNPCComponent::StopInteract()
 {
+	// 旧版本 StopInteract 仅负责关闭交互：
+	// bIsInteracting = false;
+	// CurrentPlayerController.Reset();
+	if (bReportConversationToDirector)
+	{
+		SubmitConversationSummaryToDirector();
+	}
+
 	bIsInteracting = false;
 	CurrentPlayerController.Reset();
 }
@@ -298,6 +310,34 @@ FAstroPlayerSnapshot UAstroNPCComponent::CollectPlayerSnapshot() const
 	Snapshot.CurrentQuest = TEXT("None");
 
 	return Snapshot;
+}
+
+FAstroNPCConversationSummary UAstroNPCComponent::BuildConversationSummaryForDirector() const
+{
+	FAstroNPCConversationSummary Summary;
+	Summary.NPCId = GetOwner() != nullptr ? GetOwner()->GetName() : TEXT("UnknownNPC");
+	Summary.NPCDisplayName = GetOwner() != nullptr ? GetOwner()->GetActorNameOrLabel() : TEXT("UnknownNPC");
+	Summary.PlayerName = CurrentPlayerController.IsValid() && CurrentPlayerController->PlayerState != nullptr
+		? CurrentPlayerController->PlayerState->GetPlayerName()
+		: TEXT("UnknownPlayer");
+	Summary.ConversationTurns = ConversationHistory;
+	Summary.LastPlayerMessage = LastUserMessage;
+	Summary.LastNPCReply = LastReceivedReply;
+	return Summary;
+}
+
+void UAstroNPCComponent::SubmitConversationSummaryToDirector()
+{
+	if (GetWorld() == nullptr || GetWorld()->GetGameInstance() == nullptr)
+	{
+		return;
+	}
+
+	if (UAstroDirectorSubsystem* DirectorSubsystem = GetWorld()->GetGameInstance()->GetSubsystem<UAstroDirectorSubsystem>())
+	{
+		DirectorSubsystem->SubmitConversationSummary(BuildConversationSummaryForDirector());
+		RuntimeCharacterOverlay = DirectorSubsystem->GetCharacterOverlayForNPC(GetOwner() != nullptr ? GetOwner()->GetName() : TEXT("UnknownNPC"));
+	}
 }
 
 void UAstroNPCComponent::SendRequestToModel(const FString& PromptText)
