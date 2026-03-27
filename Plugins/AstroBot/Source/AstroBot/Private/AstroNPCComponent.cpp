@@ -7,6 +7,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "Engine/GameInstance.h"
+#include "Logging/LogMacros.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
@@ -16,9 +17,25 @@
 #include "CharacterCardAsset.h"
 #include "WorldBookAsset.h"
 
+DEFINE_LOG_CATEGORY_STATIC(LogAstroNPCComponent, Log, All);
+
 namespace AstroNPCComponentInternal
 {
 	static const FString PlayNPCAnimationToolName = TEXT("PlayNPCAnimation");
+
+	static FString DialogueRoleToJsonLabel(const EAstroDialogueRole Role)
+	{
+		switch (Role)
+		{
+		case EAstroDialogueRole::System:
+			return TEXT("system");
+		case EAstroDialogueRole::NPC:
+			return TEXT("npc");
+		case EAstroDialogueRole::Player:
+		default:
+			return TEXT("player");
+		}
+	}
 
 	static void AddChatMessageJson(TArray<TSharedPtr<FJsonValue>>& MessageValues, const FAstroOpenAIChatMessage& Message)
 	{
@@ -266,6 +283,8 @@ void UAstroNPCComponent::StopInteract()
 	// 旧版本 StopInteract 仅负责关闭交互：
 	// bIsInteracting = false;
 	// CurrentPlayerController.Reset();
+	LogConversationForDirectorDebug();
+
 	if (bReportConversationToDirector)
 	{
 		SubmitConversationSummaryToDirector();
@@ -320,10 +339,61 @@ FAstroNPCConversationSummary UAstroNPCComponent::BuildConversationSummaryForDire
 	Summary.PlayerName = CurrentPlayerController.IsValid() && CurrentPlayerController->PlayerState != nullptr
 		? CurrentPlayerController->PlayerState->GetPlayerName()
 		: TEXT("UnknownPlayer");
+	Summary.PlayerSnapshot = CollectPlayerSnapshot();
+	Summary.BasePersonaText = CharacterCard != nullptr ? CharacterCard->PersonaText : TEXT("");
+	Summary.BaseStyleText = CharacterCard != nullptr ? CharacterCard->StyleText : TEXT("");
+	Summary.BaseForbiddenText = CharacterCard != nullptr ? CharacterCard->ForbiddenText : TEXT("");
 	Summary.ConversationTurns = ConversationHistory;
 	Summary.LastPlayerMessage = LastUserMessage;
 	Summary.LastNPCReply = LastReceivedReply;
 	return Summary;
+}
+
+FString UAstroNPCComponent::BuildConversationHistoryJson() const
+{
+	TArray<TSharedPtr<FJsonValue>> ConversationValues;
+	for (const FAstroDialogueTurn& Turn : ConversationHistory)
+	{
+		TSharedRef<FJsonObject> TurnObject = MakeShared<FJsonObject>();
+		TurnObject->SetStringField(TEXT("role"), AstroNPCComponentInternal::DialogueRoleToJsonLabel(Turn.Role));
+		TurnObject->SetStringField(TEXT("text"), Turn.Text);
+		ConversationValues.Add(MakeShared<FJsonValueObject>(TurnObject));
+	}
+
+	TSharedRef<FJsonObject> RootObject = MakeShared<FJsonObject>();
+	RootObject->SetArrayField(TEXT("conversation"), ConversationValues);
+
+	FString JsonOutput;
+	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&JsonOutput);
+	if (!FJsonSerializer::Serialize(RootObject, Writer))
+	{
+		return TEXT("{\"conversation\":[]}");
+	}
+
+	return JsonOutput;
+}
+
+FString UAstroNPCComponent::BuildCharacterCardDebugText() const
+{
+	if (CharacterCard == nullptr)
+	{
+		return TEXT("CharacterCard: None");
+	}
+
+	// 当前阶段只做调试日志用途，因此直接输出角色卡核心字段，便于后续接导演系统真实总结。
+	FString DebugText;
+	DebugText += TEXT("CharacterCard\n");
+	DebugText += TEXT("Persona:\n") + CharacterCard->PersonaText + TEXT("\n\n");
+	DebugText += TEXT("Style:\n") + CharacterCard->StyleText + TEXT("\n\n");
+	DebugText += TEXT("Forbidden:\n") + CharacterCard->ForbiddenText;
+	return DebugText;
+}
+
+void UAstroNPCComponent::LogConversationForDirectorDebug() const
+{
+	// 结束对话时输出角色卡文本与完整对话 JSON，便于你在切真实导演模型前确认发送素材是否正确。
+	UE_LOG(LogAstroNPCComponent, Log, TEXT("[AstroBot Director Debug] %s"), *BuildCharacterCardDebugText());
+	UE_LOG(LogAstroNPCComponent, Log, TEXT("[AstroBot Director Debug] ConversationJson=%s"), *BuildConversationHistoryJson());
 }
 
 void UAstroNPCComponent::SubmitConversationSummaryToDirector()

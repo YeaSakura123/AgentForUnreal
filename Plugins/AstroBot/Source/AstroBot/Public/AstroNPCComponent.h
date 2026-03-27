@@ -138,6 +138,9 @@ protected:
 	// 采集当前可用的玩家字段，作为 Prompt 上下文。
 	FAstroPlayerSnapshot CollectPlayerSnapshot() const;
 	FAstroNPCConversationSummary BuildConversationSummaryForDirector() const;
+	FString BuildConversationHistoryJson() const;
+	FString BuildCharacterCardDebugText() const;
+	void LogConversationForDirectorDebug() const;
 	void SubmitConversationSummaryToDirector();
 	// 请求发送入口；内部根据模式切换到 Stub / Mock / RealAPI，避免破坏现有上游流程。
 	void SendRequestToModel(const FString& PromptText);
