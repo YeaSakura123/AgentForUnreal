@@ -135,10 +135,16 @@ protected:
 	UPROPERTY(Transient)
 	TArray<FAstroDialogueTurn> ConversationHistory;
 
+	// 当前这一次打开对话框到关闭对话框之间的会话历史，仅用于提交给导演系统做本次会话总结。
+	UPROPERTY(Transient)
+	TArray<FAstroDialogueTurn> CurrentSessionConversationHistory;
+
 	// 采集当前可用的玩家字段，作为 Prompt 上下文。
 	FAstroPlayerSnapshot CollectPlayerSnapshot() const;
+	void RefreshRuntimeOverlayFromDirector();
 	FAstroNPCConversationSummary BuildConversationSummaryForDirector() const;
 	FString BuildConversationHistoryJson() const;
+	FString BuildCurrentRuntimeCharacterCardDebugText() const;
 	FString BuildCharacterCardDebugText() const;
 	void LogConversationForDirectorDebug() const;
 	void SubmitConversationSummaryToDirector();

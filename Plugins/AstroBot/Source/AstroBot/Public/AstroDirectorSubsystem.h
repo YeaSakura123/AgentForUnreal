@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Subsystems/GameInstanceSubsystem.h"
+#include "AstroDirectorProfileAsset.h"
 #include "AstroDirectorTypes.h"
 #include "Interfaces/IHttpRequest.h"
 #include "AstroDirectorSubsystem.generated.h"
@@ -24,6 +25,14 @@ public:
 	// 配置导演模型的真实 HTTP 参数。当前版本使用 OpenAI 兼容聊天补全接口。
 	UFUNCTION(BlueprintCallable, Category = "AstroBot|Director")
 	void ConfigureDirectorAPI(const FString& InApiBaseUrl, const FString& InModelName, const FString& InApiKey);
+
+	// 设置导演配置资产，让导演系统拥有独立的身份层和策略层。
+	UFUNCTION(BlueprintCallable, Category = "AstroBot|Director")
+	void SetDirectorProfile(UAstroDirectorProfileAsset* InDirectorProfile);
+
+	// 获取当前导演配置资产。
+	UFUNCTION(BlueprintCallable, Category = "AstroBot|Director")
+	UAstroDirectorProfileAsset* GetDirectorProfile() const;
 
 	// 接收单次 NPC 会话摘要并更新运行时角色补丁。
 	UFUNCTION(BlueprintCallable, Category = "AstroBot|Director")
@@ -50,6 +59,9 @@ public:
 
 	UPROPERTY(BlueprintReadOnly, Category = "AstroBot|Director")
 	FAstroDirectorDecision LastDirectorDecision;
+
+	UPROPERTY(BlueprintReadOnly, Category = "AstroBot|Director")
+	TObjectPtr<UAstroDirectorProfileAsset> DirectorProfile = nullptr;
 
 protected:
 	// 导演系统真实请求配置。Subsystem 不方便像组件那样直接在关卡中编辑，因此先提供运行时配置入口。

@@ -30,9 +30,22 @@ namespace AstroDirectorSubsystemInternal
 		const FAstroNPCConversationSummary& Summary,
 		const FAstroRuntimeCharacterOverlay& CurrentOverlay,
 		const FAstroRuntimeWorldOverlay& CurrentWorldOverlay,
+		const UAstroDirectorProfileAsset* DirectorProfile,
 		FString& OutPayload)
 	{
 		TSharedRef<FJsonObject> RootObject = MakeShared<FJsonObject>();
+
+		TSharedRef<FJsonObject> DirectorProfileObject = MakeShared<FJsonObject>();
+		if (DirectorProfile != nullptr)
+		{
+			DirectorProfileObject->SetStringField(TEXT("director_name"), DirectorProfile->DirectorName);
+			DirectorProfileObject->SetStringField(TEXT("director_persona"), DirectorProfile->DirectorPersonaText);
+			DirectorProfileObject->SetStringField(TEXT("world_style"), DirectorProfile->WorldStyleText);
+			DirectorProfileObject->SetStringField(TEXT("difficulty_style"), DirectorProfile->DifficultyStyleText);
+			DirectorProfileObject->SetStringField(TEXT("intervention_policy"), DirectorProfile->InterventionPolicyText);
+			DirectorProfileObject->SetStringField(TEXT("forbidden"), DirectorProfile->DirectorForbiddenText);
+		}
+		RootObject->SetObjectField(TEXT("director_profile"), DirectorProfileObject);
 
 		TSharedRef<FJsonObject> NPCObject = MakeShared<FJsonObject>();
 		NPCObject->SetStringField(TEXT("id"), Summary.NPCId);
@@ -201,6 +214,21 @@ void UAstroDirectorSubsystem::ConfigureDirectorAPI(const FString& InApiBaseUrl, 
 	bUseRealDirectorAPI = !DirectorApiBaseUrl.IsEmpty() && !DirectorModelName.IsEmpty() && !DirectorApiKey.IsEmpty();
 }
 
+void UAstroDirectorSubsystem::SetDirectorProfile(UAstroDirectorProfileAsset* InDirectorProfile)
+{
+	DirectorProfile = InDirectorProfile;
+
+	// 导演配置资产加载后，用 DirectorNotes 记录当前配置来源，便于调试时识别正在使用哪套导演策略。
+	CurrentWorldOverlay.DirectorNotes = DirectorProfile != nullptr
+		? FString::Printf(TEXT("DirectorProfile=%s"), *DirectorProfile->DirectorName)
+		: TEXT("DirectorProfile=None");
+}
+
+UAstroDirectorProfileAsset* UAstroDirectorSubsystem::GetDirectorProfile() const
+{
+	return DirectorProfile;
+}
+
 void UAstroDirectorSubsystem::Deinitialize()
 {
 	CharacterOverlays.Empty();
@@ -226,6 +254,12 @@ void UAstroDirectorSubsystem::SubmitConversationSummary(const FAstroNPCConversat
 	if (!bUseRealDirectorAPI)
 	{
 		LastDirectorDecision.SummaryText = TEXT("Director API is not configured. Call ConfigureDirectorAPI before submitting conversation summaries.");
+		return;
+	}
+
+	if (DirectorProfile == nullptr)
+	{
+		LastDirectorDecision.SummaryText = TEXT("Director profile is not configured. Call SetDirectorProfile before submitting conversation summaries.");
 		return;
 	}
 
@@ -258,6 +292,15 @@ FAstroRuntimeWorldOverlay UAstroDirectorSubsystem::GetCurrentWorldOverlay() cons
 
 FAstroToolExecutionResult UAstroDirectorSubsystem::ExecuteDirectorToolCall(const FAstroToolCall& ToolCall)
 {
+	if (DirectorProfile != nullptr && !DirectorProfile->bAllowDirectorToolCalls)
+	{
+		FAstroToolExecutionResult Result;
+		Result.bSuccess = false;
+		Result.ResultMessage = TEXT("Director profile forbids tool calls.");
+		Result.ResultJson = TEXT("{\"success\":false,\"reason\":\"tool_calls_forbidden_by_profile\"}");
+		return Result;
+	}
+
 	if (ToolExecutor == nullptr)
 	{
 		FAstroToolExecutionResult Result;
@@ -305,7 +348,7 @@ void UAstroDirectorSubsystem::SendConversationSummaryToDirectorModel(const FAstr
 	CurrentOverlay.NPCId = Summary.NPCId;
 
 	FString PayloadJson;
-	if (!AstroDirectorSubsystemInternal::BuildDirectorRequestPayload(Summary, CurrentOverlay, CurrentWorldOverlay, PayloadJson))
+	if (!AstroDirectorSubsystemInternal::BuildDirectorRequestPayload(Summary, CurrentOverlay, CurrentWorldOverlay, DirectorProfile, PayloadJson))
 	{
 		LastDirectorDecision.SummaryText = TEXT("Failed to build director request payload.");
 		return;
@@ -318,7 +361,18 @@ void UAstroDirectorSubsystem::SendConversationSummaryToDirectorModel(const FAstr
 	{
 		TSharedRef<FJsonObject> SystemMessage = MakeShared<FJsonObject>();
 		SystemMessage->SetStringField(TEXT("role"), TEXT("system"));
-		SystemMessage->SetStringField(TEXT("content"), TEXT("You are a game director AI. Analyze the provided NPC interaction data and decide whether the NPC's runtime relationship overlay should change. Always respond with strict JSON only. Use the field 'character_overlay_update' to describe changes. If no update is needed, return should_update=false."));
+		// 旧版本 system prompt 为固定硬编码文本，保留如下作为回退参考：
+		// SystemMessage->SetStringField(TEXT("content"), TEXT("You are a game director AI..."));
+		FString SystemPrompt = TEXT("You are a game director AI. Analyze the provided NPC interaction data and decide whether the NPC's runtime relationship overlay and world overlay should change. Always respond with strict JSON only. Use the field 'character_overlay_update' to describe NPC changes. If no NPC update is needed, return should_update=false.");
+		if (DirectorProfile != nullptr)
+		{
+			SystemPrompt += TEXT("\n\n## Director Persona\n") + DirectorProfile->DirectorPersonaText;
+			SystemPrompt += TEXT("\n\n## World Style\n") + DirectorProfile->WorldStyleText;
+			SystemPrompt += TEXT("\n\n## Difficulty Style\n") + DirectorProfile->DifficultyStyleText;
+			SystemPrompt += TEXT("\n\n## Intervention Policy\n") + DirectorProfile->InterventionPolicyText;
+			SystemPrompt += TEXT("\n\n## Forbidden\n") + DirectorProfile->DirectorForbiddenText;
+		}
+		SystemMessage->SetStringField(TEXT("content"), SystemPrompt);
 		Messages.Add(MakeShared<FJsonValueObject>(SystemMessage));
 
 		TSharedRef<FJsonObject> UserMessage = MakeShared<FJsonObject>();
@@ -378,7 +432,10 @@ void UAstroDirectorSubsystem::OnDirectorHttpResponseReceived(FHttpRequestPtr Req
 		return;
 	}
 
-	CharacterOverlays.Add(NPCId, Overlay);
+	if (DirectorProfile == nullptr || DirectorProfile->bAllowNPCOverlayUpdates)
+	{
+		CharacterOverlays.Add(NPCId, Overlay);
+	}
 	LastDirectorDecision.SummaryText = SummaryText.IsEmpty()
 		? FString::Printf(TEXT("Director summary processed for NPC: %s"), *NPCId)
 		: SummaryText;

@@ -239,6 +239,10 @@ void UAstroNPCComponent::StartInteract(APlayerController* PlayerController)
 {
 	CurrentPlayerController = PlayerController;
 	bIsInteracting = CurrentPlayerController.IsValid();
+
+	// 开启一次新会话时清空本次会话历史，并主动同步一次导演系统的最新 Overlay。
+	CurrentSessionConversationHistory.Reset();
+	RefreshRuntimeOverlayFromDirector();
 }
 
 void UAstroNPCComponent::SendMessage(const FString& Text)
@@ -256,6 +260,7 @@ void UAstroNPCComponent::SendMessage(const FString& Text)
 	PlayerTurn.Role = EAstroDialogueRole::Player;
 	PlayerTurn.Text = Text;
 	ConversationHistory.Add(PlayerTurn);
+	CurrentSessionConversationHistory.Add(PlayerTurn);
 
 	if (ConversationHistory.Num() > MaxConversationTurns)
 	{
@@ -268,6 +273,9 @@ void UAstroNPCComponent::SendMessage(const FString& Text)
 	{
 		RecalledEntries = WorldBook->RetrieveEntriesByKeyword(Text, RecallTopK);
 	}
+
+	// 每次真正构建 Prompt 前都主动同步一次导演系统的最新 Overlay，避免组件本地缓存落后于导演系统异步回包结果。
+	RefreshRuntimeOverlayFromDirector();
 
 	const FAstroPlayerSnapshot Snapshot = CollectPlayerSnapshot();
 	// 旧版本 Prompt 构建只传 CharacterCard / WorldBook / Snapshot / History，保留如下：
@@ -331,6 +339,19 @@ FAstroPlayerSnapshot UAstroNPCComponent::CollectPlayerSnapshot() const
 	return Snapshot;
 }
 
+void UAstroNPCComponent::RefreshRuntimeOverlayFromDirector()
+{
+	if (GetWorld() == nullptr || GetWorld()->GetGameInstance() == nullptr)
+	{
+		return;
+	}
+
+	if (UAstroDirectorSubsystem* DirectorSubsystem = GetWorld()->GetGameInstance()->GetSubsystem<UAstroDirectorSubsystem>())
+	{
+		RuntimeCharacterOverlay = DirectorSubsystem->GetCharacterOverlayForNPC(GetOwner() != nullptr ? GetOwner()->GetName() : TEXT("UnknownNPC"));
+	}
+}
+
 FAstroNPCConversationSummary UAstroNPCComponent::BuildConversationSummaryForDirector() const
 {
 	FAstroNPCConversationSummary Summary;
@@ -343,7 +364,9 @@ FAstroNPCConversationSummary UAstroNPCComponent::BuildConversationSummaryForDire
 	Summary.BasePersonaText = CharacterCard != nullptr ? CharacterCard->PersonaText : TEXT("");
 	Summary.BaseStyleText = CharacterCard != nullptr ? CharacterCard->StyleText : TEXT("");
 	Summary.BaseForbiddenText = CharacterCard != nullptr ? CharacterCard->ForbiddenText : TEXT("");
-	Summary.ConversationTurns = ConversationHistory;
+	// 旧版本这里提交的是运行期累计对话历史，保留如下：
+	// Summary.ConversationTurns = ConversationHistory;
+	Summary.ConversationTurns = CurrentSessionConversationHistory;
 	Summary.LastPlayerMessage = LastUserMessage;
 	Summary.LastNPCReply = LastReceivedReply;
 	return Summary;
@@ -352,7 +375,7 @@ FAstroNPCConversationSummary UAstroNPCComponent::BuildConversationSummaryForDire
 FString UAstroNPCComponent::BuildConversationHistoryJson() const
 {
 	TArray<TSharedPtr<FJsonValue>> ConversationValues;
-	for (const FAstroDialogueTurn& Turn : ConversationHistory)
+	for (const FAstroDialogueTurn& Turn : CurrentSessionConversationHistory)
 	{
 		TSharedRef<FJsonObject> TurnObject = MakeShared<FJsonObject>();
 		TurnObject->SetStringField(TEXT("role"), AstroNPCComponentInternal::DialogueRoleToJsonLabel(Turn.Role));
@@ -371,6 +394,23 @@ FString UAstroNPCComponent::BuildConversationHistoryJson() const
 	}
 
 	return JsonOutput;
+}
+
+FString UAstroNPCComponent::BuildCurrentRuntimeCharacterCardDebugText() const
+{
+	// 这不是修改资产本体，而是输出“小 AI 当前真正看到的角色卡表现层”——基础角色卡 + 运行时 Overlay。
+	FString DebugText;
+	DebugText += TEXT("RuntimeCharacterCard\n");
+	DebugText += TEXT("BasePersona:\n") + (CharacterCard != nullptr ? CharacterCard->PersonaText : TEXT("")) + TEXT("\n\n");
+	DebugText += TEXT("BaseStyle:\n") + (CharacterCard != nullptr ? CharacterCard->StyleText : TEXT("")) + TEXT("\n\n");
+	DebugText += TEXT("BaseForbidden:\n") + (CharacterCard != nullptr ? CharacterCard->ForbiddenText : TEXT("")) + TEXT("\n\n");
+	DebugText += TEXT("OverlayAffinityScore:\n") + FString::FromInt(RuntimeCharacterOverlay.AffinityScore) + TEXT("\n\n");
+	DebugText += TEXT("OverlayRelationshipSummary:\n") + RuntimeCharacterOverlay.RelationshipSummary + TEXT("\n\n");
+	DebugText += TEXT("OverlayAdditionalPersonaText:\n") + RuntimeCharacterOverlay.AdditionalPersonaText + TEXT("\n\n");
+	DebugText += TEXT("OverlayAdditionalStyleText:\n") + RuntimeCharacterOverlay.AdditionalStyleText + TEXT("\n\n");
+	DebugText += TEXT("OverlayAdditionalForbiddenText:\n") + RuntimeCharacterOverlay.AdditionalForbiddenText + TEXT("\n\n");
+	DebugText += TEXT("OverlayRecentMemorySummary:\n") + RuntimeCharacterOverlay.RecentMemorySummary;
+	return DebugText;
 }
 
 FString UAstroNPCComponent::BuildCharacterCardDebugText() const
@@ -394,6 +434,7 @@ void UAstroNPCComponent::LogConversationForDirectorDebug() const
 	// 结束对话时输出角色卡文本与完整对话 JSON，便于你在切真实导演模型前确认发送素材是否正确。
 	UE_LOG(LogAstroNPCComponent, Log, TEXT("[AstroBot Director Debug] %s"), *BuildCharacterCardDebugText());
 	UE_LOG(LogAstroNPCComponent, Log, TEXT("[AstroBot Director Debug] ConversationJson=%s"), *BuildConversationHistoryJson());
+	UE_LOG(LogAstroNPCComponent, Log, TEXT("[AstroBot Director Debug] %s"), *BuildCurrentRuntimeCharacterCardDebugText());
 }
 
 void UAstroNPCComponent::SubmitConversationSummaryToDirector()
@@ -406,7 +447,6 @@ void UAstroNPCComponent::SubmitConversationSummaryToDirector()
 	if (UAstroDirectorSubsystem* DirectorSubsystem = GetWorld()->GetGameInstance()->GetSubsystem<UAstroDirectorSubsystem>())
 	{
 		DirectorSubsystem->SubmitConversationSummary(BuildConversationSummaryForDirector());
-		RuntimeCharacterOverlay = DirectorSubsystem->GetCharacterOverlayForNPC(GetOwner() != nullptr ? GetOwner()->GetName() : TEXT("UnknownNPC"));
 	}
 }
 
@@ -643,6 +683,7 @@ void UAstroNPCComponent::HandleModelReply(const FString& ReplyText)
 	NPCTurn.Role = EAstroDialogueRole::NPC;
 	NPCTurn.Text = ReplyText;
 	ConversationHistory.Add(NPCTurn);
+	CurrentSessionConversationHistory.Add(NPCTurn);
 
 	if (ConversationHistory.Num() > MaxConversationTurns)
 	{
